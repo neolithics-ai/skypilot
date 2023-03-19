@@ -50,7 +50,7 @@
                 "description": "The size of the VM"
             }
         },
-        "vmTags": { 
+        "vmTags": {
             "type": "object",
             "metadata": {
                 "description": "Tags for the VM"
@@ -162,12 +162,12 @@
             "condition": "[not(parameters('provisionPublicIp'))]"
         },
         {
-            "type": "Microsoft.Network/publicIpAddresses",
+            "type": "Microsoft.Network/publicIPAddresses",
             "apiVersion": "2019-02-01",
             "name": "[concat(variables('publicIpAddressName'), copyIndex())]",
             "location": "[variables('location')]",
             "properties": {
-                "publicIpAllocationMethod": "Static",
+                "publicIPAllocationMethod": "Static",
                 "publicIPAddressVersion": "IPv4"
             },
             "copy": {
@@ -199,7 +199,7 @@
                 },
                 "storageProfile": {
                     "osDisk": {
-                        "createOption": "fromImage",
+                        "createOption": "FromImage",
                         "managedDisk": {
                             "storageAccountType": "[variables('osDiskType')]"
                         },
@@ -241,8 +241,8 @@
             "identity": {
                 "type": "UserAssigned",
                 "userAssignedIdentities": {
-                    "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'ray-msi-user-identity')]": {
-                    }
+                    "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'ray-msi-user-identity')]": {},
+                    "[resourceId('dev', 'Microsoft.ManagedIdentity/userAssignedIdentities', 'ml-trainer')]": {}
                 }
             }
         }
