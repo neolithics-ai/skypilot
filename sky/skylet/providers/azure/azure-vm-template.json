@@ -206,10 +206,7 @@
                         "diskSizeGB": "[parameters('osDiskSizeGB')]"
                     },
                     "imageReference": {
-                        "publisher": "[parameters('imagePublisher')]",
-                        "offer": "[parameters('imageOffer')]",
-                        "sku": "[parameters('imageSku')]",
-                        "version": "[parameters('imageVersion')]"
+                        "id": "/subscriptions/86e301d8-0791-427f-b033-bfbdf53bd375/resourceGroups/eli-test-rg/providers/Microsoft.Compute/galleries/NX_Gallery/images/NX_Cuda_12"
                     }
                 },
                 "networkProfile": {
