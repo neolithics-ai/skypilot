@@ -1,0 +1,58 @@
+name: neolithics
+
+resources:
+  cloud: azure
+  region: eastus
+  accelerators: A100-80GB
+
+# Optional: upload a working directory to remote ~/sky_workdir.
+# Commands in "setup" and "run" will be executed under it.
+#
+# workdir: .
+
+# Optional: upload local files.
+# Format:
+#   /remote/path: /local/path
+#
+# file_mounts:
+#   ~/.vimrc: ~/.vimrc
+#   ~/.netrc: ~/.netrc
+
+setup: |
+  set -e  # Exit if any command failed.
+
+  # Clone NX code
+  GIT_USERNAME=$(az keyvault secret show -n github-username --vault-name nx-dev-vault -o json --query value | tr -d '"')
+  GIT_TOKEN=$(az keyvault secret show -n github-token --vault-name nx-dev-vault -o json --query value | tr -d '"')
+  mkdir -p ~/code
+  cd ~/code
+  git clone --depth 1 https://${GIT_USERNAME}:${GIT_TOKEN}@github.com/neolithics-ai/neolithics
+  git clone --depth 1 https://${GIT_USERNAME}:${GIT_TOKEN}@github.com/neolithics-ai/inspection
+
+run: |
+  set -e  # Exit if any command failed.
+  mkdir -p ~/data
+
+  #  Copy data from a bucket
+  export AZCOPY_AUTO_LOGIN_TYPE="MSI"
+  export AZCOPY_MSI_CLIENT_ID="00540065-d4b8-4501-acda-1be1c5c44c40"
+  azcopy sync \
+    https://training001.blob.core.windows.net/azureml/Tomato_semisup_exp_FIXED/Tomato_semisup_exp_fixed \
+    ~/data/Tomato_semisup_exp_fixed \
+    --recursive
+
+
+  # Update NX repos
+  pushd ~/code/neolithics
+  git pull
+  popd
+
+  pushd ~/code/inspection
+  git pull
+  popd
+
+  # Activate venv
+  source ~/virtenvs/pytorch/bin/activate
+
+  # Run your training code here.
+  echo Train me!
