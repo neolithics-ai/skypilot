@@ -12,7 +12,7 @@ import tempfile
 import textwrap
 import time
 import typing
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple, Union
 from typing_extensions import Literal
 import uuid
 
@@ -86,7 +86,7 @@ WAIT_HEAD_NODE_IP_MAX_ATTEMPTS = 3
 # We use fixed IP address to avoid DNS lookup blocking the check, for machine
 # with no internet connection.
 # Refer to: https://stackoverflow.com/questions/3764291/how-can-i-see-if-theres-an-available-and-active-network-connection-in-python # pylint: disable=line-too-long
-_TEST_IP = 'https://8.8.8.8'
+_TEST_IP = 'https://1.1.1.1'
 
 # Allow each CPU thread take 2 tasks.
 # Note: This value cannot be too small, otherwise OOM issue may occur.
@@ -152,6 +152,7 @@ def fill_template(template_name: str, variables: Dict,
     with open(template_path) as fin:
         template = fin.read()
     output_path = os.path.abspath(os.path.expanduser(output_path))
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
     # Write out yaml config.
     j2_template = jinja2.Template(template)
@@ -699,7 +700,7 @@ class SSHConfigHelper(object):
 
 def _replace_yaml_dicts(
         new_yaml: str, old_yaml: str, restore_key_names: Set[str],
-        restore_key_names_exceptions: Sequence[Sequence[str]]) -> str:
+        restore_key_names_exceptions: Sequence[Tuple[str, ...]]) -> str:
     """Replaces 'new' with 'old' for all keys in restore_key_names.
 
     The replacement will be applied recursively and only for the blocks
@@ -817,13 +818,23 @@ def write_cluster_config(
     else:
         # ssh_proxy_command_config: Dict[str, str], region_name -> command
         # This type check is done by skypilot_config at config load time.
-        if region_name not in ssh_proxy_command_config:
-            # Skip this region. The upper layer will handle the failover to
-            # other regions.
-            raise exceptions.ResourcesUnavailableError(
-                f'No ssh_proxy_command provided for region {region_name}. Skipped.'
-            )
-        ssh_proxy_command = ssh_proxy_command_config[region_name]
+
+        # There are two cases:
+        if keep_launch_fields_in_existing_config:
+            # (1) We're re-provisioning an existing cluster.
+            #
+            # We use None for ssh_proxy_command, which will be restored to the
+            # cluster's original value later by _replace_yaml_dicts().
+            ssh_proxy_command = None
+        else:
+            # (2) We're launching a new cluster.
+            #
+            # Resources.get_valid_regions_for_launchable() respects the keys (regions)
+            # in ssh_proxy_command in skypilot_config. So here we add an assert.
+            assert region_name in ssh_proxy_command_config, (
+                region_name, ssh_proxy_command_config)
+            ssh_proxy_command = ssh_proxy_command_config[region_name]
+
     logger.debug(f'Using ssh_proxy_command: {ssh_proxy_command!r}')
 
     # Use a tmp file path to avoid incomplete YAML file being re-used in the
@@ -1175,7 +1186,8 @@ def parallel_data_transfer_to_nodes(
             subprocess_utils.handle_returncode(
                 rc,
                 cmd, ('Failed to run command before rsync '
-                      f'{origin_source} -> {target}.'),
+                      f'{origin_source} -> {target}. '
+                      'Ensure that the network is stable, then retry.'),
                 stderr=stdout + stderr)
 
         if run_rsync:
@@ -1503,7 +1515,7 @@ def check_network_connection():
 
 def _process_cli_query(
     cloud: str, cluster: str, query_cmd: str, deliminiator: str,
-    status_map: Dict[str, global_user_state.ClusterStatus]
+    status_map: Mapping[str, Optional[global_user_state.ClusterStatus]]
 ) -> List[global_user_state.ClusterStatus]:
     """Run the cloud CLI query and returns cluster status.
 
@@ -1545,11 +1557,13 @@ def _process_cli_query(
     cluster_status = stdout.strip()
     if cluster_status == '':
         return []
-    return [
-        status_map[s]
-        for s in cluster_status.split(deliminiator)
-        if status_map[s] is not None
-    ]
+
+    statuses = []
+    for s in cluster_status.split(deliminiator):
+        node_status = status_map[s]
+        if node_status is not None:
+            statuses.append(node_status)
+    return statuses
 
 
 def _query_status_aws(
@@ -1634,6 +1648,8 @@ def _query_status_gcp(
         logger.debug(f'Terminating preempted TPU VM cluster {cluster}')
         backend = backends.CloudVmRayBackend()
         handle = global_user_state.get_handle_from_cluster_name(cluster)
+        assert isinstance(handle,
+                          backends.CloudVmRayResourceHandle), (cluster, handle)
         # Do not use refresh cluster status during teardown, as that will
         # cause inifinite recursion by calling cluster status refresh
         # again.
@@ -1697,7 +1713,9 @@ def _query_status_lambda(
     possible_names = [f'{cluster}-head', f'{cluster}-worker']
     for node in vms:
         if node.get('name') in possible_names:
-            status_list.append(status_map[node['status']])
+            node_status = status_map[node['status']]
+            if node_status is not None:
+                status_list.append(node_status)
     return status_list
 
 
@@ -1743,7 +1761,35 @@ def check_owner_identity(cluster_name: str) -> None:
     if owner_identity is None:
         global_user_state.set_owner_identity_for_cluster(
             cluster_name, current_user_identity)
-    elif owner_identity != current_user_identity:
+    else:
+        assert isinstance(owner_identity, list)
+        # It is OK if the owner identity is shorter, which will happen when
+        # the cluster is launched before #1808. In that case, we only check
+        # the same length (zip will stop at the shorter one).
+        for i, (owner,
+                current) in enumerate(zip(owner_identity,
+                                          current_user_identity)):
+            if owner == current:
+                if i != 0:
+                    logger.warning(
+                        f'The cluster was owned by {owner_identity}, but '
+                        f'a new identity {current_user_identity} is activated. We still '
+                        'allow the operation as the two identities are likely to have '
+                        'the same access to the cluster. Please be aware that this can '
+                        'cause unexpected cluster leakage if the two identities are not '
+                        'actually equivalent (e.g., belong to the same person).'
+                    )
+                if i != 0 or len(owner_identity) != len(current_user_identity):
+                    # We update the owner of a cluster, when:
+                    # 1. The strictest identty (i.e. the first one) does not
+                    # match, but the latter ones match.
+                    # 2. The length of the two identities are different, which
+                    # will only happen when the cluster is launched before #1808.
+                    # Update the user identity to avoid showing the warning above
+                    # again.
+                    global_user_state.set_owner_identity_for_cluster(
+                        cluster_name, current_user_identity)
+                return  # The user identity matches.
         with ux_utils.print_exception_no_traceback():
             raise exceptions.ClusterOwnerIdentityMismatchError(
                 f'{cluster_name!r} ({cloud}) is owned by account '
@@ -2108,13 +2154,18 @@ def check_cluster_available(
             f'not fatal, but {operation} might hang if the cluster is not up.\n'
             f'Detailed reason: {e}')
         record = global_user_state.get_cluster_from_name(cluster_name)
-        cluster_status, handle = record['status'], record['handle']
+        if record is None:
+            cluster_status, handle = None, None
+        else:
+            cluster_status, handle = record['status'], record['handle']
 
+    bright = colorama.Style.BRIGHT
+    reset = colorama.Style.RESET_ALL
     if handle is None:
         with ux_utils.print_exception_no_traceback():
             raise ValueError(
                 f'{colorama.Fore.YELLOW}Cluster {cluster_name!r} does not '
-                f'exist.{colorama.Style.RESET_ALL}')
+                f'exist.{reset}')
     backend = get_backend_from_handle(handle)
     if check_cloud_vm_ray_backend and not isinstance(
             backend, backends.CloudVmRayBackend):
@@ -2123,7 +2174,7 @@ def check_cluster_available(
                 f'{colorama.Fore.YELLOW}{operation.capitalize()}: skipped for '
                 f'cluster {cluster_name!r}. It is only supported by backend: '
                 f'{backends.CloudVmRayBackend.NAME}.'
-                f'{colorama.Style.RESET_ALL}')
+                f'{reset}')
     if cluster_status != global_user_state.ClusterStatus.UP:
         if onprem_utils.check_if_local_cloud(cluster_name):
             raise exceptions.ClusterNotUpError(
@@ -2131,12 +2182,19 @@ def check_cluster_available(
                     cluster_name),
                 cluster_status=cluster_status)
         with ux_utils.print_exception_no_traceback():
+            hint_for_init = ''
+            if cluster_status == global_user_state.ClusterStatus.INIT:
+                hint_for_init = (
+                    f'{reset} Wait for a launch to finish, or use this command '
+                    f'to try to transition the cluster to UP: {bright}sky '
+                    f'start {cluster_name}{reset}')
             raise exceptions.ClusterNotUpError(
                 f'{colorama.Fore.YELLOW}{operation.capitalize()}: skipped for '
                 f'cluster {cluster_name!r} (status: {cluster_status.value}). '
                 'It is only allowed for '
                 f'{global_user_state.ClusterStatus.UP.value} clusters.'
-                f'{colorama.Style.RESET_ALL}',
+                f'{hint_for_init}'
+                f'{reset}',
                 cluster_status=cluster_status)
 
     if handle.head_ip is None:
@@ -2161,7 +2219,7 @@ def get_clusters(
     include_reserved: bool,
     refresh: bool,
     cloud_filter: CloudFilter = CloudFilter.CLOUDS_AND_DOCKER,
-    cluster_names: Optional[Union[str, Sequence[str]]] = None,
+    cluster_names: Optional[Union[str, List[str]]] = None,
 ) -> List[Dict[str, Any]]:
     """Returns a list of cached or optionally refreshed cluster records.
 
@@ -2314,6 +2372,12 @@ def get_backend_from_handle(
     ...
 
 
+@typing.overload
+def get_backend_from_handle(
+        handle: backends.ResourceHandle) -> backends.Backend:
+    ...
+
+
 def get_backend_from_handle(
         handle: backends.ResourceHandle) -> backends.Backend:
     """Gets a Backend object corresponding to a handle.
@@ -2420,7 +2484,9 @@ def validate_schema(obj, schema, err_msg_prefix=''):
                     else:
                         err_msg += f'\nFound unsupported field {field!r}.'
         else:
-            err_msg = err_msg_prefix + e.message
+            # Example e.json_path value: '$.resources'
+            err_msg = (err_msg_prefix + e.message +
+                       f'. Check problematic field(s): {e.json_path}')
 
     if err_msg:
         with ux_utils.print_exception_no_traceback():
@@ -2428,7 +2494,11 @@ def validate_schema(obj, schema, err_msg_prefix=''):
 
 
 def check_public_cloud_enabled():
-    """Checks if any of the public clouds is enabled."""
+    """Checks if any of the public clouds is enabled.
+
+    Exceptions:
+        exceptions.NoCloudAccessError: if no public cloud is enabled.
+    """
 
     def _no_public_cloud():
         enabled_clouds = global_user_state.get_enabled_clouds()
@@ -2442,7 +2512,7 @@ def check_public_cloud_enabled():
     sky_check.check(quiet=True)
     if _no_public_cloud():
         with ux_utils.print_exception_no_traceback():
-            raise RuntimeError(
+            raise exceptions.NoCloudAccessError(
                 'Cloud access is not set up. Run: '
                 f'{colorama.Style.BRIGHT}sky check{colorama.Style.RESET_ALL}')
 
