@@ -17,3 +17,5 @@ types-setuptools
 pytest
 pytest-xdist
 pytest-env>=0.6
+
+azure-mgmt-network~=23.0.0
