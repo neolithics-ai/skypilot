@@ -26,8 +26,7 @@ setup: |
   GIT_TOKEN=$(az keyvault secret show -n github-token --vault-name nx-dev-vault -o json --query value | tr -d '"')
   mkdir -p ~/code
   cd ~/code
-  git clone --depth 1 https://${GIT_USERNAME}:${GIT_TOKEN}@github.com/neolithics-ai/neolithics
-  git clone --depth 1 https://${GIT_USERNAME}:${GIT_TOKEN}@github.com/neolithics-ai/inspection
+  git clone https://${GIT_USERNAME}:${GIT_TOKEN}@github.com/neolithics-ai/neolithics
 
 run: |
   set -e  # Exit if any command failed.
@@ -44,11 +43,8 @@ run: |
 
   # Update NX repos
   pushd ~/code/neolithics
-  git pull
-  popd
-
-  pushd ~/code/inspection
-  git pull
+  git fetch
+  git checkout ${GIT_COMMIT_ID}
   popd
 
   # Activate venv
