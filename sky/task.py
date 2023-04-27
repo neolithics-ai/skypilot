@@ -2,6 +2,7 @@
 import inspect
 import os
 import re
+import subprocess
 import typing
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
@@ -174,6 +175,8 @@ class Task:
         if dag is not None:
             dag.add(self)
 
+        self.additional_envs = {}
+
     def _validate(self):
         """Checks if the Task fields are valid."""
         if not _is_valid_name(self.name):
@@ -331,6 +334,11 @@ class Task:
 
         task.set_resources({resources})
         assert not config, f'Invalid task args: {config.keys()}'
+
+        # Get git commit id of the yaml file, if applicable
+        git_result = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=os.path.dirname(yaml_path), capture_output=True)
+        task.additional_envs['GIT_COMMIT_ID'] = git_result.stdout.decode().strip()
+
         return task
 
     @property
@@ -349,7 +357,7 @@ class Task:
 
     @property
     def envs(self) -> Dict[str, str]:
-        return self._envs
+        return {**self.additional_envs, **self._envs}
 
     def update_envs(
             self, envs: Union[None, List[Tuple[str, str]],
