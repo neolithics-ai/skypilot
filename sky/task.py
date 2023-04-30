@@ -336,8 +336,10 @@ class Task:
         assert not config, f'Invalid task args: {config.keys()}'
 
         # Get git commit id of the yaml file, if applicable
-        git_result = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=os.path.dirname(yaml_path), capture_output=True)
-        task.additional_envs['GIT_COMMIT_ID'] = git_result.stdout.decode().strip()
+        yaml_dir = os.path.abspath(os.path.dirname(os.path.expanduser(yaml_path)))
+        if os.path.isdir(yaml_dir):
+            git_result = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=yaml_dir, capture_output=True)
+            task.additional_envs['GIT_COMMIT_ID'] = git_result.stdout.decode().strip()
 
         return task
 
