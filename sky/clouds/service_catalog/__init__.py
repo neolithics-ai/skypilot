@@ -16,7 +16,7 @@ if typing.TYPE_CHECKING:
     from sky.clouds.service_catalog import common
 
 CloudFilter = Optional[Union[List[str], str]]
-_ALL_CLOUDS = ('aws', 'azure', 'gcp', 'ibm', 'lambda')
+_ALL_CLOUDS = ('aws', 'azure', 'gcp', 'ibm', 'lambda', 'scp', 'oci')
 
 
 def _map_clouds_catalog(clouds: CloudFilter, method_name: str, *args, **kwargs):
@@ -52,6 +52,7 @@ def list_accelerators(
     gpus_only: bool = True,
     name_filter: Optional[str] = None,
     region_filter: Optional[str] = None,
+    quantity_filter: Optional[int] = None,
     clouds: CloudFilter = None,
     case_sensitive: bool = True,
 ) -> 'Dict[str, List[common.InstanceTypeInfo]]':
@@ -64,7 +65,8 @@ def list_accelerators(
     of instance type offerings. See usage in cli.py.
     """
     results = _map_clouds_catalog(clouds, 'list_accelerators', gpus_only,
-                                  name_filter, region_filter, case_sensitive)
+                                  name_filter, region_filter, quantity_filter,
+                                  case_sensitive)
     if not isinstance(results, list):
         results = [results]
     ret: Dict[str,
@@ -79,6 +81,7 @@ def list_accelerator_counts(
     gpus_only: bool = True,
     name_filter: Optional[str] = None,
     region_filter: Optional[str] = None,
+    quantity_filter: Optional[int] = None,
     clouds: CloudFilter = None,
 ) -> Dict[str, List[int]]:
     """List all accelerators offered by Sky and available counts.
@@ -87,7 +90,8 @@ def list_accelerator_counts(
     of available counts. See usage in cli.py.
     """
     results = _map_clouds_catalog(clouds, 'list_accelerators', gpus_only,
-                                  name_filter, region_filter, False)
+                                  name_filter, region_filter, quantity_filter,
+                                  False)
     if not isinstance(results, list):
         results = [results]
     accelerator_counts: Dict[str, Set[int]] = collections.defaultdict(set)
@@ -254,22 +258,6 @@ def get_region_zones_for_accelerators(
     """Returns a list of regions for a given accelerators."""
     return _map_clouds_catalog(clouds, 'get_region_zones_for_accelerators',
                                acc_name, acc_count, use_spot)
-
-
-def check_host_accelerator_compatibility(instance_type: str,
-                                         accelerators: Optional[Dict[str, int]],
-                                         clouds: CloudFilter = None) -> None:
-    """GCP only: Check if host VM type is compatible with the accelerators.
-
-    This function is invoked whenever a Resources object is created.
-    This function ensures that TPUs and GPUs (except A100) are attached to N1,
-    and A100 GPUs are attached to A2 machines. However, it does NOT check
-    the maximum vCPU count and maximum memory limits for the accelerators
-    because any Resources like GCP(n1-highmem-64, {'V100': 0.01}) can be valid
-    for sky exec/launch on an existing cluster.
-    """
-    _map_clouds_catalog(clouds, 'check_host_accelerator_compatibility',
-                        instance_type, accelerators)
 
 
 def check_accelerator_attachable_to_host(instance_type: str,
