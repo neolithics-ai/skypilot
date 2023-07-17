@@ -19,20 +19,35 @@ resources:
 #   ~/.netrc: ~/.netrc
 
 setup: |
+  echo "Running setup..."
+  
   set -e  # Exit if any command failed.
 
   # Clone NX code
+  echo "Cloning NX code..."
   GIT_USERNAME=$(az keyvault secret show -n github-username --vault-name nx-dev-vault -o json --query value | tr -d '"')
   GIT_TOKEN=$(az keyvault secret show -n github-token --vault-name nx-dev-vault -o json --query value | tr -d '"')
   mkdir -p ~/code
   cd ~/code
   git clone https://${GIT_USERNAME}:${GIT_TOKEN}@github.com/neolithics-ai/neolithics
 
+  echo "Setup complete."
+
 run: |
+  echo "Executing skypilot script..."
+  
   set -e  # Exit if any command failed.
+  if [[ -z "${GIT_COMMIT_ID}" ]]; then
+    printf '%s\n' "Error: Environment variable GIT_COMMIT_ID was not set" >&2
+    exit 1
+  fi
+
+  export NEPTUNE_API_TOKEN=$(az keyvault secret show -n neptune-api-token --vault-name nx-dev-vault -o json --query value | tr -d '"')
+
   mkdir -p ~/data
 
   #  Copy data from a bucket
+  echo "Copying data..."
   export AZCOPY_AUTO_LOGIN_TYPE="MSI"
   export AZCOPY_MSI_CLIENT_ID="00540065-d4b8-4501-acda-1be1c5c44c40"
   azcopy sync \
@@ -40,15 +55,25 @@ run: |
     ~/data/Tomato_semisup_exp_fixed \
     --recursive
 
-
-  # Update NX repos
+  # Update NX repo
+  echo "Updating NX repo..."
   pushd ~/code/neolithics
   git fetch
   git checkout ${GIT_COMMIT_ID}
   popd
 
   # Activate venv
+  echo "Activating venv..."
   source ~/virtenvs/pytorch/bin/activate
 
-  # Run your training code here.
-  echo Train me!
+  echo "Installing requirements..."
+  # cd /path/to/requirements/folder
+  # pip install -r requirements.txt
+
+  echo "Running training..."
+  export PYTHONPATH=/home/azureuser/code/neolithics/:/home/azureuser/code/neolithics/packages/video-pipeline
+  export HYDRA_FULL_ERROR=1
+  
+  echo "Run your training code here. You can parametrize using `--env VAR=value` with skypilot commands like launch and exec."
+
+  echo "Training complete."
