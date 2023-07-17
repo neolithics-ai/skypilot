@@ -25,6 +25,8 @@ def load_chain_dag_from_yaml(
       trivial task).
     """
     configs = common_utils.read_yaml_all(path)
+    git_info = task_lib.get_git_info(path)
+
     dag_name = None
     if set(configs[0].keys()) == {'name'}:
         dag_name = configs[0]['name']
@@ -41,6 +43,10 @@ def load_chain_dag_from_yaml(
         # decision to not apply overrides. Here we maintain this behavior. We
         # can listen to user feedback to change this.
         env_overrides = None
+
+    if env_overrides is None:
+        env_overrides = []
+    env_overrides = list(env_overrides) + git_info
 
     current_task = None
     with dag_lib.Dag() as dag:

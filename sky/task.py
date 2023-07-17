@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import typing
+from contextlib import suppress
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
 import yaml
@@ -102,6 +103,24 @@ def _fill_in_env_vars_in_file_mounts(
     pattern = r'\$\{?\b([a-zA-Z_][a-zA-Z0-9_]*)\b\}?'
     file_mounts_str = re.sub(pattern, replace_var, file_mounts_str)
     return json.loads(file_mounts_str)
+
+
+def get_git_info(yaml_path: str) -> List[Tuple[str, str]]:
+    """
+    Returns [('GIT_COMMIT_ID'), git_commit_id] if the yaml_path is in a git
+    repo, else an empty list.
+    """
+
+    ret = []
+    yaml_dir = os.path.abspath(os.path.dirname(os.path.expanduser(yaml_path)))
+    with suppress(subprocess.CalledProcessError):
+        git_result = subprocess.run(['git', 'rev-parse', 'HEAD'],
+                                    cwd=yaml_dir,
+                                    capture_output=True,
+                                    check=True)
+        git_commit_id = git_result.stdout.decode().strip()
+        ret.append(('GIT_COMMIT_ID', git_commit_id))
+    return ret
 
 
 class Task:
@@ -211,8 +230,6 @@ class Task:
         dag = sky.dag.get_current_dag()
         if dag is not None:
             dag.add(self)
-
-        self.additional_envs = {}
 
     def _validate(self):
         """Checks if the Task fields are valid."""
@@ -370,13 +387,6 @@ class Task:
 
         task.set_resources({resources})
         assert not config, f'Invalid task args: {config.keys()}'
-
-        # Get git commit id of the yaml file, if applicable
-        yaml_dir = os.path.abspath(os.path.dirname(os.path.expanduser(yaml_path)))
-        if os.path.isdir(yaml_dir):
-            git_result = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=yaml_dir, capture_output=True)
-            task.additional_envs['GIT_COMMIT_ID'] = git_result.stdout.decode().strip()
-
         return task
 
     @staticmethod
@@ -408,7 +418,13 @@ class Task:
 
         if config is None:
             config = {}
-        return Task.from_yaml_config(config)
+
+        # Get git commit id of the yaml file, if applicable
+        git_info = get_git_info(yaml_path)
+
+        task = Task.from_yaml_config(config, env_overrides=git_info)
+
+        return task
 
     @property
     def num_nodes(self) -> int:
@@ -426,7 +442,7 @@ class Task:
 
     @property
     def envs(self) -> Dict[str, str]:
-        return {**self.additional_envs, **self._envs}
+        return self._envs
 
     def update_envs(
             self, envs: Union[None, List[Tuple[str, str]],
